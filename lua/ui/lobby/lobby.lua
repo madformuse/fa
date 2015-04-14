@@ -3196,7 +3196,6 @@ function CalcConnectionStatus(peer)
             end
 
             table.insert(connectedTo, peer.id)
-            GpgNetSend('Connected', string.format("%d", peer.id))
         end
         if not table.find(peer.establishedPeers, lobbyComm:GetLocalPlayerID()) then
             -- they haven't reported that they can talk to us?
@@ -3453,7 +3452,6 @@ function InitLobbyComm(protocol, localPort, desiredPlayerName, localPlayerUID, n
         localPlayerID = myID
         localPlayerName = myName
 
-        GpgNetSend('connectedToHost', string.format("%d", hostID))
         lobbyComm:SendData(hostID, { Type = 'SetAvailableMods', Mods = GetLocallyAvailableMods(), Name = localPlayerName} )
 
         lobbyComm:SendData(hostID,
