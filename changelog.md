@@ -1,3 +1,9 @@
+Patch 3645 (Beta: July, 2015)
+==========================
+
+FIXME: Add stuff from patchnotes here.
+
+
 Patch 3644 (July 27, 2015)
 ==========================
 
