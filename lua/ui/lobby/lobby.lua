@@ -3529,8 +3529,7 @@ function InitLobbyComm(protocol, localPort, desiredPlayerName, localPlayerUID, n
 
                 gameInfo.PlayerOptions[data.Slot][key] = val
                 if isHost then
-                    GpgNetSend('PlayerOption', data.Slot, key, val)
-
+                    GpgNetSend('PlayerOption', gameInfo.PlayerOptions[data.Slot].OwnerID, key, val)
                     -- TODO: This should be a global listener on PlayerData objects, but I'm in too
                     -- much pain to implement that listener system right now. EVIL HACK TIME
                     if key == "Ready" then
@@ -5275,10 +5274,21 @@ function InitHostUtils()
         SendPlayerSettingsToServer = function(slotNum)
             local playerInfo = gameInfo.PlayerOptions[slotNum]
             local playerName = playerInfo.PlayerName
-            GpgNetSend('PlayerOption', string.format("faction %s %d %s", playerName, slotNum, playerInfo.Faction))
-            GpgNetSend('PlayerOption', string.format("color %s %d %s", playerName, slotNum, playerInfo.PlayerColor))
-            GpgNetSend('PlayerOption', string.format("team %s %d %s", playerName, slotNum, playerInfo.Team))
-            GpgNetSend('PlayerOption', string.format("startspot %s %d %s", playerName, slotNum, slotNum))
+
+            -- AI are identified by name, players by peer id.
+            local sendPlayerOption = function(key, value)
+                if playerInfo.Human then
+                    GpgNetSend('PlayerOption', playerInfo.OwnerID, key, value)
+                else
+                    GpgNetSend('AIOption', playerInfo.PlayerName, key, value)
+                end
+            end
+
+            sendPlayerOption('Faction', playerInfo.Faction)
+            sendPlayerOption('Color', playerInfo.PlayerColor)
+            sendPlayerOption('Team', playerInfo.Team)
+            sendPlayerOption('StartSpot', slotNum)
+            sendPlayerOption('Army', slotNum)
         end,
 
         --- Called by the host when someone's readyness state changes to update the enabledness of buttons.
