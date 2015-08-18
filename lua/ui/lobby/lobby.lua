@@ -1423,19 +1423,17 @@ function ReturnToMenu(reconnect)
     end
 end
 
-function PrintSystemMessage(id, parameters)
-    AddChatText(LOCF("<LOC "..id..">Unknown system message. Check localisation file", unpack(parameters)))
-end
-
-function SendSystemMessage(id, ...)
+function SendSystemMessage(message, ...)
+    -- Message is a localisable message (it should start with a <LOC> tag), and Args is the list of
+    -- arguments to pass to LOCF, if appropriate.
     local data = {
         Type = "SystemMessage",
-        Id = id,
+        Message = message,
         Args = arg
     }
 
     lobbyComm:BroadcastData(data)
-    PrintSystemMessage(id, arg)
+    AddChatText(LOCF(message, unpack(arg)))
 end
 
 function PublicChat(text)
@@ -3583,7 +3581,7 @@ function InitLobbyComm(protocol, localPort, desiredPlayerName, localPlayerUID, n
             end
         else -- Non-host only messages
             if data.Type == 'SystemMessage' then
-                PrintSystemMessage(data.Id, data.Args)
+                AddChatText(LOCF(data.Message, unpack(data.Args)))
             elseif data.Type == 'SetAllPlayerNotReady' then
                 if not IsPlayer(localPlayerID) then
                     return
@@ -3768,8 +3766,7 @@ function InitLobbyComm(protocol, localPort, desiredPlayerName, localPlayerUID, n
                 for k,peer in peers do
                     if peer.quiet > LobbyComm.quietTimeout then
                         lobbyComm:EjectPeer(peer.id,'TimedOutToHost')
-                        -- %s timed out.
-                        SendSystemMessage("lobui_0205", peer.name)
+                        SendSystemMessage("<LOC lobui_0205>%s timed out.", peer.name)
 
                         -- Search and Remove the peer disconnected
                         for k, v in CurrentConnection do
@@ -4957,8 +4954,7 @@ function InitHostUtils()
             )
 
             if not ignoreMsg then
-                -- %s has switched from a player to an observer.
-                SendSystemMessage("lobui_0226", gameInfo.Observers[index].PlayerName)
+                SendSystemMessage("<LOC lobui_0226>%s has switched from a player to an observer.", gameInfo.Observers[index].PlayerName)
             end
         end,
 
@@ -4997,8 +4993,7 @@ function InitHostUtils()
             )
 
             if not ignoreMsg then
-                -- %s has switched from an observer to player.
-                SendSystemMessage("lobui_0227", incomingPlayer.PlayerName)
+                SendSystemMessage("<LOC lobui_0227>%s has switched from an observer to player.", incomingPlayer.PlayerName)
             end
 
             refreshObserverList()
@@ -5130,8 +5125,8 @@ function InitHostUtils()
             -- Move the observer into the slot the first player came from.
             HostUtils.ConvertObserverToPlayer(FindObserverSlotForID(toOpts.OwnerID), moveFrom, true)
 
-            -- %s has switched with %s
-            SendSystemMessage("lobui_0417", fromOpts.PlayerName, toOpts.PlayerName)
+            --
+            SendSystemMessage("<LOC lobui_0417>%s has switched with %s", fromOpts.PlayerName, toOpts.PlayerName)
         end,
 
         --- Add an observer
@@ -5155,8 +5150,7 @@ function InitHostUtils()
                 }
             )
 
-            -- %s has joined as an observer.
-            SendSystemMessage("lobui_0202", observerName)
+            SendSystemMessage("<LOC lobui_0202>%s has joined as an observer.", observerName)
             refreshObserverList()
         end,
 
@@ -5239,8 +5233,7 @@ function InitHostUtils()
             end
 
             if needMessage then
-                -- %s is missing map %s.
-                SendSystemMessage("lobui_0330", name, gameInfo.GameOptions.ScenarioFile)
+                SendSystemMessage("<LOC lobui_0330>%s is missing map %s.", name, gameInfo.GameOptions.ScenarioFile)
                 LOG('>> '..name..' is missing map '..gameInfo.GameOptions.ScenarioFile)
                 if name == localPlayerName then
                     LOG('>> '..gameInfo.GameOptions.ScenarioFile..' replaced with '..'SCMP_009')
