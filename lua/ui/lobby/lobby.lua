@@ -79,7 +79,6 @@ DebugEnabled = Prefs.GetFromCurrentProfile('LobbyDebug') or ''
 local HideDefaultOptions = Prefs.GetFromCurrentProfile('LobbyHideDefaultOptions') == 'true'
 
 local connectedTo = {} -- by UID
-CurrentConnection = {} -- by Name
 ConnectionEstablished = {} -- by Name
 ConnectedWithProxy = {} -- by UID
 
@@ -835,12 +834,6 @@ function SetSlotInfo(slotNum, playerInfo)
                 end
 
                 table.insert(ConnectionEstablished, playerName)
-                for k, v in CurrentConnection do
-                    if v == playerName then
-                        CurrentConnection[k] = nil
-                        break
-                    end
-                end
             end
         end
     else
@@ -3167,12 +3160,6 @@ function CalcConnectionStatus(peer)
                         AddChatText(LOCF("<LOC Engine0032>Connected to %s via the FAF proxy.", peer.name), "Engine0032")
                     end
                     table.insert(ConnectionEstablished, peer.name)
-                    for k, v in CurrentConnection do -- Remove PlayerName in this Table
-                        if v == peer.name then
-                            CurrentConnection[k] = nil
-                            break
-                        end
-                    end
                 end
             end
 
@@ -3790,12 +3777,6 @@ function InitLobbyComm(protocol, localPort, desiredPlayerName, localPlayerUID, n
                         SendSystemMessage("lobui_0205", peer.name)
 
                         -- Search and Remove the peer disconnected
-                        for k, v in CurrentConnection do
-                            if v == peer.name then
-                                CurrentConnection[k] = nil
-                                break
-                            end
-                        end
                         for k, v in ConnectionEstablished do
                             if v == peer.name then
                                 ConnectionEstablished[k] = nil
@@ -3826,12 +3807,6 @@ function InitLobbyComm(protocol, localPort, desiredPlayerName, localPlayerUID, n
     lobbyComm.PeerDisconnected = function(self,peerName,peerID) -- Lost connection or try connect with proxy
 
          -- Search and Remove the peer disconnected
-        for k, v in CurrentConnection do
-            if v == peerName then
-                CurrentConnection[k] = nil
-                break
-            end
-        end
         for k, v in ConnectionEstablished do
             if v == peerName then
                 ConnectionEstablished[k] = nil
