@@ -78,9 +78,7 @@ local teamIcons = {
 DebugEnabled = Prefs.GetFromCurrentProfile('LobbyDebug') or ''
 local HideDefaultOptions = Prefs.GetFromCurrentProfile('LobbyHideDefaultOptions') == 'true'
 
-local connectedTo = {} -- by UID
-ConnectionEstablished = {} -- by Name
-ConnectedWithProxy = {} -- by UID
+local Connections = {} -- {uid={established=<true|false>, proxy=<true|false>}}
 
 -- The set of available colours for each slot. Each index in this table contains the set of colour
 -- values that may appear in its combobox. Keys in the sub-tables are indexes into allColours,
@@ -582,21 +580,23 @@ function JoinGame(address, asObserver, playerName, uid)
 end
 
 function ConnectToPeer(addressAndPort,name,uid)
+    local proxy = false
     if not string.find(addressAndPort, '127.0.0.1') then
         LOG("ConnectToPeer (name=" .. name .. ", uid=" .. uid .. ", address=" .. addressAndPort ..")")
     else
-        DisconnectFromPeer(uid)
+        proxy = true
+        if Connections[uid] then
+            DisconnectFromPeer(uid)
+        end
         LOG("ConnectToPeer (name=" .. name .. ", uid=" .. uid .. ", address=" .. addressAndPort ..", USE PROXY)")
-        table.insert(ConnectedWithProxy, uid)
     end
+
+    Connections[uid] = {proxy=proxy, established=false}
     lobbyComm:ConnectToPeer(addressAndPort,name,uid)
 end
 
 function DisconnectFromPeer(uid)
     LOG("DisconnectFromPeer (uid=" .. uid ..")")
-    if wasConnected(uid) then
-        table.remove(connectedTo, uid)
-    end
     GpgNetSend('Disconnected', string.format("%d", uid))
     lobbyComm:DisconnectFromPeer(uid)
 end
@@ -684,10 +684,15 @@ end
 function GetPlayerDisplayName(playerInfo)
     local playerName = playerInfo.PlayerName
     local displayName = ""
+
+    if Connections[playerInfo.OwnerID].proxy then
+        playerName = playerName .. ' (proxy)'
+    end
+
     if playerInfo.PlayerClan ~= "" then
-        return string.format("[%s] %s", playerInfo.PlayerClan, playerInfo.PlayerName)
+        return string.format("[%s] %s", playerInfo.PlayerClan, playerName)
     else
-        return playerInfo.PlayerName
+        return playerName
     end
 end
 
@@ -822,20 +827,10 @@ function SetSlotInfo(slotNum, playerInfo)
     end
 
     local playerName = playerInfo.PlayerName
-    if wasConnected(playerInfo.OwnerID) or isLocallyOwned or not playerInfo.Human then
+    local connection = Connections[playerInfo.OwnerID]
+    if connection.established or isLocallyOwned or not playerInfo.Human then
         slot.name:SetTitleText(GetPlayerDisplayName(playerInfo))
         slot.name._text:SetFont('Arial Gras', 15)
-        if not table.find(ConnectionEstablished, playerName) then
-            if playerInfo.Human and not isLocallyOwned then
-                if table.find(ConnectedWithProxy, playerInfo.OwnerID) then
-                    AddChatText(LOCF("<LOC Engine0032>Connected to %s via the FAF proxy", playerName))
-                else
-                    AddChatText(LOCF("<LOC Engine0004>Connection to %s established.", playerName))
-                end
-
-                table.insert(ConnectionEstablished, playerName)
-            end
-        end
     else
         slot.name:SetTitleText(LOCF('<LOC Engine0005>Connecting to %s...', playerName))
         slot.name._text:SetFont('Arial Gras', 11)
@@ -2958,27 +2953,73 @@ function CreateUI(maxPlayers)
     -- other logic, including lobby callbacks
     ---------------------------------------------------------------------------
     GUI.posGroup = false
-    -- get ping times
+
     GUI.pingThread = ForkThread(
     function()
+        local hostDead = false
+        local quietTimeout = LobbyComm.quietTimeout
+        local prevQuiet = nil
+        function CheckIfHostIsAlive(host)
+            if not hostDead and host.quiet > quietTimeout then
+                hostDead = true
+                local function OnRetry()
+                    local host = lobbyComm:GetPeer(hostID)
+                    quietTimeout = host.quiet + LobbyComm.quietTimeout
+                    hostDead = false
+                end
+                UIUtil.QuickDialog(GUI, "<LOC lobui_0266>Connection to host timed out.",
+                                        "<LOC lobui_0267>Keep Trying", OnRetry,
+                                        "<LOC lobui_0268>Give Up", ReturnToMenu,
+                                        nil, nil,
+                                        true,
+                                        {worldCover = false, escapeButton = 2})
+            elseif host.quiet < prevQuiet then
+                threshold = LobbyComm.quietTimeout
+            end
+
+            prevQuiet = host.quiet
+        end
+
+        function CheckIfPeerIsDead(peer)
+            if peer.quiet > LobbyComm.quietTimeout then
+                lobbyComm:EjectPeer(peer.id,'TimedOutToHost')
+                SendSystemMessage("lobui_0205", peer.name)
+                Connections[peer.id] = nil
+            end
+        end
+
         while lobbyComm do
+            local lobby_peers = lobbyComm:GetPeers()
+
+            local peers = {}
+            for _, peer in lobbyComm:GetPeers() do
+                peers[peer.id] = {ping=peer.ping, status=CalcConnectionStatus(peer, lobby_peers)}
+
+                if hostID == localPlayerID then -- host kicks timed-out players
+                    CheckIfPeerIsDead(peer)
+                elseif peer.id == hostID then -- other peers check if host is alive
+                    CheckIfHostIsAlive(peer)
+                end
+            end
+
             for slot, player in gameInfo.PlayerOptions:pairs() do
                 if player.Human and player.OwnerID ~= localPlayerID then
-                    local peer = lobbyComm:GetPeer(player.OwnerID)
+                    local peer = peers[player.OwnerID]
                     local ping = peer.ping
-                    local connectionStatus = CalcConnectionStatus(peer)
+                    
                     if ping then
                         ping = math.floor(peer.ping)
                         GUI.slots[slot].pingStatus:SetValue(ping)
                         UIUtil.setEnabled(GUI.slots[slot].pingStatus, ping >= 500)
 
                         -- Set the ping bar to a colour representing the status of our connection.
-                        GUI.slots[slot].pingStatus._bar:SetTexture(UIUtil.SkinnableFile('/game/unit_bmp/bar-0' .. connectionStatus .. '_bmp.dds'))
+                        GUI.slots[slot].pingStatus._bar:SetTexture(UIUtil.SkinnableFile('/game/unit_bmp/bar-0' .. peer.status .. '_bmp.dds'))
                     else
                         GUI.slots[slot].pingStatus:Hide()
                     end
                 end
             end
+
             WaitSeconds(1)
         end
     end)
@@ -3127,15 +3168,6 @@ function RefreshOptionDisplayData(scenarioInfo)
     GUI.OptionContainer:CalcVisible()
 end
 
-function wasConnected(peer)
-    for _,v in pairs(connectedTo) do
-        if v == peer then
-            return true
-        end
-    end
-    return false
-end
-
 --- Return a status code representing the status of our connection to a peer.
 -- @param peer, native table as returned by lobbyComm:GetPeer()
 -- @return A value describing the connectivity to given peer.
@@ -3143,45 +3175,44 @@ end
 --
 -- @todo: This function has side effects despite the naming suggesting that it shouldn't.
 --        These need to go away.
-function CalcConnectionStatus(peer)
-    if peer.status ~= 'Established' then
-        return 1
-    else
-        if not wasConnected(peer.id) then
-            local peerSlot = FindSlotForID(peer.id)
-            local slot = GUI.slots[peerSlot]
-            local playerInfo = gameInfo.PlayerOptions[peerSlot]
+function CalcConnectionStatus(peer, peers)
+    local connection = Connections[peer.id]
+    if not connection or peer.status ~= 'Established' then return 1 end
 
+    if not connection.established then
+        GpgNetSend('Connected', string.format("%d", peer.id))
+        connection.established = true
+
+        if peer.id ~= localPlayerID then
+            if connection.proxy then
+                AddChatText(LOCF("<LOC Engine0032>Connected to %s via the FAF proxy.", peer.name), "Engine0032")
+            else
+                AddChatText(LOCF("<LOC Engine0004>Connection to %s established.", peer.name))
+            end
+        end
+        
+        local slot = FindSlotForID(peer.id)
+        if slot then
             slot.name:SetTitleText(GetPlayerDisplayName(playerInfo))
             slot.name._text:SetFont('Arial Gras', 15)
-            if not table.find(ConnectionEstablished, peer.name) then
-                if playerInfo.Human and not IsLocallyOwned(peerSlot) then
-                    if table.find(ConnectedWithProxy, peer.id) then
-                        AddChatText(LOCF("<LOC Engine0032>Connected to %s via the FAF proxy.", peer.name), "Engine0032")
-                    end
-                    table.insert(ConnectionEstablished, peer.name)
-                end
-            end
-
-            table.insert(connectedTo, peer.id)
-            GpgNetSend('Connected', string.format("%d", peer.id))
         end
-        if not table.find(peer.establishedPeers, lobbyComm:GetLocalPlayerID()) then
-            -- they haven't reported that they can talk to us?
-            return 2
-        end
-
-        local peers = lobbyComm:GetPeers()
-        for k,v in peers do
-            if v.id ~= peer.id and v.status == 'Established' then
-                if not table.find(peer.establishedPeers, v.id) then
-                    -- they can't talk to someone we can talk to.
-                    return 2
-                end
-            end
-        end
-        return 3
     end
+
+    if not table.find(peer.establishedPeers, localPlayerID) then
+        -- they haven't reported that they can talk to us?
+        return 2
+    end
+
+    for k,v in peers do
+        if v.id ~= peer.id and v.status == 'Established' then
+            if not table.find(peer.establishedPeers, v.id) then
+                -- they can't talk to someone we can talk to.
+                return 2
+            end
+        end
+    end
+
+    return 3
 end
 
 function EveryoneHasEstablishedConnections()
@@ -3437,6 +3468,7 @@ function InitLobbyComm(protocol, localPort, desiredPlayerName, localPlayerUID, n
         localPlayerName = myName
 
         GpgNetSend('connectedToHost', string.format("%d", hostID))
+        Connections[theHostID] = {established=true}
         lobbyComm:SendData(hostID, { Type = 'SetAvailableMods', Mods = Mods.GetLocallyAvailableMods(), Name = localPlayerName} )
 
         lobbyComm:SendData(hostID,
@@ -3451,34 +3483,6 @@ function InitLobbyComm(protocol, localPort, desiredPlayerName, localPlayerUID, n
             ForkThread(function() UpdateBenchmark() end)
         end
 
-        local function KeepAliveThreadFunc()
-            local threshold = LobbyComm.quietTimeout
-            local active = true
-            local prev = 0
-            while lobbyComm do
-                local host = lobbyComm:GetPeer(hostID)
-                if active and host.quiet > threshold then
-                    active = false
-                    local function OnRetry()
-                        host = lobbyComm:GetPeer(hostID)
-                        threshold = host.quiet + LobbyComm.quietTimeout
-                        active = true
-                    end
-                    UIUtil.QuickDialog(GUI, "<LOC lobui_0266>Connection to host timed out.",
-                                            "<LOC lobui_0267>Keep Trying", OnRetry,
-                                            "<LOC lobui_0268>Give Up", ReturnToMenu,
-                                            nil, nil,
-                                            true,
-                                            {worldCover = false, escapeButton = 2})
-                elseif host.quiet < prev then
-                    threshold = LobbyComm.quietTimeout
-                end
-                prev = host.quiet
-                WaitSeconds(1)
-            end
-        end -- KeepAliveThreadFunc
-
-        GUI.keepAliveThread = ForkThread(KeepAliveThreadFunc)
         CreateUI(LobbyComm.maxPlayerSlots)
     end
 
@@ -3547,6 +3551,7 @@ function InitLobbyComm(protocol, localPort, desiredPlayerName, localPlayerUID, n
             -- Host only messages
             if data.Type == 'AddPlayer' then
                 -- create empty slot if possible and give it to the player
+                Connections[data.SenderID] = {established=true}
                 SendCompleteGameStateToPeer(data.SenderID)
                 HostUtils.TryAddPlayer(data.SenderID, 0, PlayerData(data.PlayerOptions))
                 PlayVoice(Sound{Bank = 'XGG',Cue = 'XGG_Computer__04716'}, true)
@@ -3692,9 +3697,7 @@ function InitLobbyComm(protocol, localPort, desiredPlayerName, localPlayerUID, n
         if GUI.pingThread then
             KillThread(GUI.pingThread)
         end
-        if GUI.keepAliveThread then
-            KillThread(GUI.keepAliveThread)
-        end
+
         GUI:Destroy()
         GUI = false
         MenuCommon.MenuCleanup()
@@ -3765,37 +3768,6 @@ function InitLobbyComm(protocol, localPort, desiredPlayerName, localPlayerUID, n
             SetGameOption('ScenarioFile', self.desiredScenario, true)
         end
 
-        GUI.keepAliveThread = ForkThread(
-        -- Eject players who haven't sent a heartbeat in a while
-        function()
-            while true and lobbyComm do
-                local peers = lobbyComm:GetPeers()
-                for k,peer in peers do
-                    if peer.quiet > LobbyComm.quietTimeout then
-                        lobbyComm:EjectPeer(peer.id,'TimedOutToHost')
-                        -- %s timed out.
-                        SendSystemMessage("lobui_0205", peer.name)
-
-                        -- Search and Remove the peer disconnected
-                        for k, v in ConnectionEstablished do
-                            if v == peer.name then
-                                ConnectionEstablished[k] = nil
-                                break
-                            end
-                        end
-                        for k, v in ConnectedWithProxy do
-                            if v == peer.id then
-                                ConnectedWithProxy[k] = nil
-                                break
-                            end
-                        end
-                    end
-                end
-                WaitSeconds(1)
-            end
-        end
-        )
-
         CreateUI(LobbyComm.maxPlayerSlots)
         if not singlePlayer then
             ForkThread(function() UpdateBenchmark() end)
@@ -3805,20 +3777,7 @@ function InitLobbyComm(protocol, localPort, desiredPlayerName, localPlayerUID, n
     end
 
     lobbyComm.PeerDisconnected = function(self,peerName,peerID) -- Lost connection or try connect with proxy
-
-         -- Search and Remove the peer disconnected
-        for k, v in ConnectionEstablished do
-            if v == peerName then
-                ConnectionEstablished[k] = nil
-                break
-            end
-        end
-        for k, v in ConnectedWithProxy do
-            if v == peerID then
-                ConnectedWithProxy[k] = nil
-                break
-            end
-        end
+        Connections[peerID] = nil
 
         if IsPlayer(peerID) then
             local slot = FindSlotForID(peerID)
